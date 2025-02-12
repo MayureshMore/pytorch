@@ -1,5 +1,6 @@
 # mypy: ignore-errors
 
+import builtins
 import collections
 import contextlib
 import dataclasses
@@ -80,7 +81,7 @@ if TYPE_CHECKING:
 
 
 def is_standard_setattr(val):
-    return val in (object.__setattr__,)
+    return val in (object.__setattr__, BaseException.__setattr__)
 
 
 def is_forbidden_context_manager(ctx):
@@ -152,11 +153,17 @@ class UserDefinedClassVariable(UserDefinedVariable):
     @staticmethod
     @functools.lru_cache(None)
     def supported_c_new_functions():
+        exceptions = [
+            getattr(builtins, name).__new__
+            for name in dir(builtins)
+            if isinstance(getattr(builtins, name), type)
+            and issubclass(getattr(builtins, name), BaseException)
+        ]
         return {
             object.__new__,
             dict.__new__,
             tuple.__new__,
-        }
+        }.union(exceptions)
 
     @staticmethod
     def is_supported_new_method(value):
@@ -691,6 +698,24 @@ class UserDefinedClassVariable(UserDefinedVariable):
         return super().const_getattr(tx, name)
 
 
+class UserDefinedExceptionClassVariable(UserDefinedClassVariable):
+    def __init__(self, value, **kwargs):
+        super().__init__(value, **kwargs)
+        self.exc_vt = variables.ExceptionVariable(value, ())
+
+    @property
+    def fn(self):
+        return self.exc_type
+
+    def __getattr__(self, name):
+        if name in self.__class__.__dict__.keys():
+            return getattr(self, name)
+        return getattr(self.exc_vt, name)
+
+    def __str__(self):
+        return f"{self.value.__name__}"
+
+
 class NO_SUCH_SUBOBJ:
     pass
 
@@ -819,6 +844,9 @@ class UserDefinedObjectVariable(UserDefinedVariable):
         kwargs: "dict[str, VariableTracker]",
     ) -> "VariableTracker":
         from . import ConstantVariable, UserMethodVariable
+
+        # if name == "__init__":
+        #     breakpoint()
 
         method = self._maybe_get_baseclass_method(name)
         if method is not None:
@@ -1387,6 +1415,36 @@ class SourcelessGraphModuleVariable(UserDefinedObjectVariable):
             args,
             kwargs,
         )
+
+
+class UserDefinedExceptionObjectVariable(UserDefinedObjectVariable):
+    def __init__(self, value, **kwargs):
+        super().__init__(value, **kwargs)
+        self.exc_vt = variables.ExceptionVariable(self.value_type, ())
+
+    @property
+    def fn(self):
+        return self.value_type
+
+    def call_method(self, tx, name, args, kwargs):
+        if (
+            name == "__init__"
+            and (method := self._maybe_get_baseclass_method(name))
+            and inspect.ismethoddescriptor(method)
+            and len(kwargs) == 0
+        ):
+            self.exc_vt.args = args
+            self.value.args = args
+            return variables.ConstantVariable(None)
+        return super().call_method(tx, name, args, kwargs)
+
+    def __getattr__(self, name):
+        if name in self.__class__.__dict__.keys():
+            return getattr(self, name)
+        return getattr(self.exc_vt, name)
+
+    def reconstruct(self, codegen):
+        unimplemented(f"{self.__class__.__name__} reconstruct")
 
 
 class KeyedJaggedTensorVariable(UserDefinedObjectVariable):

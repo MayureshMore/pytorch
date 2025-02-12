@@ -121,6 +121,7 @@ from .user_defined import (
     RemovableHandleVariable,
     UserDefinedClassVariable,
     UserDefinedDictVariable,
+    UserDefinedExceptionObjectVariable,
     UserDefinedObjectVariable,
     UserDefinedTupleVariable,
 )
